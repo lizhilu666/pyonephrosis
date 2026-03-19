@@ -2,24 +2,24 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import shap
 import matplotlib.pyplot as plt
+import shap
 
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# 注册中文字体（必须有 simsunb.ttf）
+# ===== 中文字体 =====
 pdfmetrics.registerFont(TTFont('SimSun', 'simsunb.ttf'))
 
-# 页面设置
+# ===== 页面 =====
 st.set_page_config(page_title="肾积脓风险评估系统", layout="centered")
-
 st.title("🏥 肾积脓风险评估与临床决策系统")
 st.subheader("Pyonephrosis-CDSS")
 
-# ===== 加载模型 =====
+# ===== 加载模型和列 =====
 model = joblib.load("model.pkl")
+columns = joblib.load("columns.pkl")
 
 # ===== 输入 =====
 st.header("📋 患者指标录入")
@@ -48,12 +48,19 @@ if st.button("🔍 计算风险"):
         "NLR": nlr
     }
 
+    # ===== 自动补齐变量（核心修复）=====
     df = pd.DataFrame([input_dict])
 
+    for col in columns:
+        if col not in df.columns:
+            df[col] = 0
+
+    df = df[columns]
+
+    # ===== 预测 =====
     prob = model.predict_proba(df)[0][1]
 
     st.subheader("📊 风险评估结果")
-
     st.metric("脓毒血症风险概率", f"{prob*100:.1f}%")
 
     if prob < 0.3:
@@ -64,36 +71,40 @@ if st.button("🔍 计算风险"):
         st.error("高风险 🔴")
 
     # ===== 干预模拟 =====
-    st.subheader("🧠 干预模拟（调整指标 → 风险变化）")
+    st.subheader("🧠 干预模拟")
 
     new_pct = st.slider("调整PCT", 0.0, 100.0, pct)
     new_crp = st.slider("调整CRP", 0.0, 300.0, crp)
 
-    new_input = df.copy()
-    new_input["PCT"] = new_pct
-    new_input["CRP"] = new_crp
+    df_new = df.copy()
+    if "PCT" in df_new.columns:
+        df_new["PCT"] = new_pct
+    if "CRP" in df_new.columns:
+        df_new["CRP"] = new_crp
 
-    new_prob = model.predict_proba(new_input)[0][1]
+    new_prob = model.predict_proba(df_new)[0][1]
 
     st.info(f"👉 干预后风险：{new_prob*100:.1f}%")
     st.write(f"风险变化：{(new_prob - prob)*100:.1f}%")
 
-    # ===== SHAP解释 =====
-    st.subheader("📈 SHAP解释（影响因素）")
+    # ===== SHAP =====
+    st.subheader("📈 SHAP解释")
 
-    explainer = shap.Explainer(model, df)
-    shap_values = explainer(df)
+    try:
+        explainer = shap.Explainer(model, df)
+        shap_values = explainer(df)
 
-    fig, ax = plt.subplots()
-    shap.plots.waterfall(shap_values[0], show=False)
-    st.pyplot(fig)
+        fig, ax = plt.subplots()
+        shap.plots.waterfall(shap_values[0], show=False)
+        st.pyplot(fig)
+    except:
+        st.warning("SHAP暂时无法显示（不影响使用）")
 
-    # ===== PDF报告 =====
-    st.subheader("📄 下载报告")
+    # ===== PDF =====
+    st.subheader("📄 报告下载")
 
     def create_pdf():
         c = canvas.Canvas("report.pdf")
-
         c.setFont("SimSun", 12)
 
         c.drawString(50, 800, "肾积脓风险评估报告")
